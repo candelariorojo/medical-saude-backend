@@ -5,20 +5,26 @@
 
 <script>
 async function test() {
-  const res = await fetch("http://localhost:3000/analizar", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      tema: "test",
-      usuario: {},
-      observaciones: "hola",
-      modo: "basico"
-    })
-  })
+  try {
+    const res = await fetch("https://vitalcontrol-backend.onrender.com/analizar", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        tema: "Evaluación inicial",
+        usuario: { edad: 30, peso: 70, altura: 175, sexo: "M" },
+        observaciones: "Siento leve fatiga por las tardes",
+        inputMode: "datosPrimariosMasObservaciones",
+        outputLevel: "basico"
+      })
+    });
 
-  console.log(await res.json())
+    const data = await res.json();
+    console.log("Respuesta de Render + Gemini:", data);
+  } catch (error) {
+    console.error("Error al conectar con Render:", error);
+  }
 }
 </script>
 
