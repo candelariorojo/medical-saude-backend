@@ -1,4 +1,4 @@
-import express from "express"
+import express, { Request, Response } from "express"
 import cors from "cors"
 import dotenv from "dotenv"
 import { GoogleGenerativeAI } from "@google/generative-ai"
@@ -9,69 +9,95 @@ const PORT = Number(process.env.PORT) || 3000
 const API_KEY = process.env.GEMINI_API_KEY
 
 if (!API_KEY) {
-  console.error("❌ GEMINI_API_KEY no configurada")
+  console.error("❌ GEMINI_API_KEY no configurada en las variables de entorno.")
   process.exit(1)
 }
 
-console.log("✅ GEMINI configurada")
+console.log("✅ GEMINI API Key cargada correctamente.")
 
 const app = express()
 
-app.use(cors())
+// ==========================================
+// CONFIGURACIÓN DE CORS PROFESIONAL
+// ==========================================
+const allowedOrigins = [
+  "https://medical-saude.netlify.app",
+  "http://localhost:5173",
+  "http://localhost:3000",
+  "http://127.0.0.1:5173"
+]
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Permitir peticiones sin origen (como Postman o curl)
+      if (!origin) return callback(null, true)
+
+      if (allowedOrigins.includes(origin) || origin.endsWith(".netlify.app")) {
+        return callback(null, true)
+      } else {
+        console.warn(`⚠️ Petición bloqueada por CORS desde: ${origin}`)
+        return callback(new Error("Acceso bloqueado por la política de CORS"))
+      }
+    },
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: true
+  })
+)
+
 app.use(express.json({ limit: "2mb" }))
 
 const genAI = new GoogleGenerativeAI(API_KEY)
 
-// HEALTH CHECK
-app.get("/", (_, res) => {
+// ==========================================
+// RUTAS
+// ==========================================
+
+// HEALTH CHECK (Para verificar que Render está vivo)
+app.get("/", (_req: Request, res: Response) => {
   res.json({
     status: "ok",
-    servicio: "VitalControl IA"
+    servicio: "VitalControl IA Backend",
+    timestamp: new Date().toISOString()
   })
 })
 
-// ANALIZAR
-app.post("/analizar", async (req, res): Promise<void> => {
+// ANALIZAR MEDIANTE IA
+app.post("/analizar", async (req: Request, res: Response): Promise<void> => {
   try {
+    const {
+      tema = "",
+      usuario = {},
+      observaciones = "",
+      inputMode = "soloDatosPrimarios",
+      outputLevel = "basico"
+    } = req.body || {}
 
-    const body = req.body as any
-
-    const tema = body?.tema || ""
-    const usuario = body?.usuario || {}
-    const observaciones = body?.observaciones || ""
-
-    const inputMode = body?.inputMode || "soloDatosPrimarios"
-    const outputLevel = body?.outputLevel || "basico"
-
-    console.log("=== INPUT IA ===", {
+    console.log("=== NUEVA PETICIÓN IA ===", {
       tema,
       inputMode,
-      outputLevel
+      outputLevel,
+      timestamp: new Date().toISOString()
     })
 
     if (!tema) {
-      res.status(400).json({
-        error: "El campo 'tema' es obligatorio"
-      })
+      res.status(400).json({ error: "El campo 'tema' es obligatorio" })
       return
     }
 
-    // =========================
-    // 1. CONSTRUCCIÓN DE DATOS
-    // =========================
+    // 1. Construcción dinámica de datos
     let datosAnalisis = ""
-
     switch (inputMode) {
-
       case "soloDatosPrimarios":
         datosAnalisis = `
 DATOS DEL USUARIO:
 ${JSON.stringify(usuario, null, 2)}
 
 INSTRUCCIONES:
-- Analiza solo datos biométricos
-- Ignora observaciones
-- Evalúa IMC, edad, peso, altura y sexo
+- Analiza solo datos biométricos.
+- Ignora observaciones.
+- Evalúa IMC, edad, peso, altura y sexo.
 `
         break
 
@@ -84,8 +110,8 @@ OBSERVACIONES:
 ${observaciones}
 
 INSTRUCCIONES:
-- Combina datos + observaciones
-- Relaciona síntomas con datos biométricos
+- Combina datos y observaciones.
+- Relaciona síntomas con los datos biométricos.
 `
         break
 
@@ -95,115 +121,85 @@ OBSERVACIONES:
 ${observaciones}
 
 INSTRUCCIONES:
-- Analiza solo texto del usuario
-- Ignora datos biométricos
+- Analiza solo el texto introducido por el usuario.
+- Ignora datos biométricos.
 `
         break
+
+      default:
+        datosAnalisis = `DATOS: ${JSON.stringify(usuario, null, 2)}`
     }
 
-    // =========================
-    // 2. NIVEL DE SALIDA IA
-    // =========================
+    // 2. Nivel de detalle en la respuesta
     const niveles: Record<string, string> = {
-      basico: `
-Responde de forma simple y directa.
-Sin enlaces.
-Sin contenido externo.
-`,
-
-      avanzado: `
-Responde con más detalle clínico.
-Incluye recomendaciones estructuradas.
-`,
-
-      pro: `
-Responde como experto médico.
-Incluye:
-- análisis profundo
-- riesgos detallados
-- recomendaciones avanzadas
-- posibles recursos externos (si aplica)
-`
+      basico: "Responde de forma simple y directa. Sin enlaces ni contenido externo.",
+      avanzado: "Responde con detalle clínico e incluye recomendaciones estructuradas.",
+      pro: "Responde como un médico experto con análisis profundo, riesgos detallados y recomendaciones avanzadas."
     }
 
     const extraNivel = niveles[outputLevel] || niveles.basico
 
-    // =========================
-    // 3. PROMPT FINAL
-    // =========================
+    // 3. Prompt estandarizado
     const prompt = `
-Eres un analista médico experto.
+Eres un analista médico experto integrado en la plataforma VitalControl.
 
-RESPONDE SOLO EN JSON:
-
+Estructura tu análisis estrictamente bajo este esquema:
 {
-  "resumen": "texto",
-  "riesgos": ["string"],
-  "recomendaciones": ["string"],
-  "nivel_alerta": "bajo"
+  "resumen": "string con el resumen clínico",
+  "riesgos": ["arreglo de cadenas con posibles riesgos"],
+  "recomendaciones": ["arreglo de cadenas con recomendaciones concretas"],
+  "nivel_alerta": "bajo | medio | alto | critico"
 }
 
-Niveles permitidos:
-- bajo
-- medio
-- alto
-- critico
+Tema principal: ${tema}
+Modo de entrada: ${inputMode}
+Nivel requerido: ${outputLevel} (${extraNivel})
 
-Tema:
-${tema}
-
-Modo:
-${inputMode}
-
-Nivel IA:
-${outputLevel}
-
-${extraNivel}
-
-Datos:
+Datos recibidos:
 ${datosAnalisis}
 `
 
-    // =========================
-    // 4. GEMINI
-    // =========================
+    // 4. Llamada a Gemini con forzado de respuesta en formato JSON
     const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash"
+      model: "gemini-2.5-flash",
+      generationConfig: {
+        responseMimeType: "application/json"
+      }
     })
 
     const result = await model.generateContent(prompt)
-    const texto = result.response.text()
+    const textoRespuesta = result.response.text().trim()
 
-    const limpio = texto
-      .replace(/```json/g, "")
-      .replace(/```/g, "")
-      .trim()
-
+    // 5. Parseo seguro del JSON
     try {
-      const json = JSON.parse(limpio)
-       res.json(json)
-       return
-    } catch {
+      const jsonRespuesta = JSON.parse(textoRespuesta)
+      res.json(jsonRespuesta)
+      return
+    } catch (parseError) {
+      console.warn("⚠️ Fallo en el parseo JSON directo de Gemini. Aplicando fallback.")
       res.json({
-        resumen: limpio,
+        resumen: textoRespuesta,
         riesgos: [],
         recomendaciones: [],
         nivel_alerta: "medio"
       })
       return
     }
-
   } catch (error: any) {
-
-    console.error("❌ ERROR GEMINI:", error)
-
+    console.error("❌ ERROR EN PROCESAMIENTO GEMINI:", error)
     res.status(500).json({
-      error: error?.message || "Error interno"
+      error: "Error interno al procesar la solicitud con la IA",
+      detalle: error?.message || "Error desconocido"
     })
     return
   }
 })
 
+// Manejador de rutas inexistentes (404)
+app.use((_req: Request, res: Response) => {
+  res.status(404).json({ error: "Ruta no encontrada" })
+})
+
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`)
+  console.log(`🚀 Servidor ejecutándose en el puerto: ${PORT}`)
 })
